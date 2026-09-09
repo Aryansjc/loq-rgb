@@ -1,0 +1,11 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=LOQ RGB
+Comment=Keyboard lighting controller for Lenovo LOQ / Legion 4-zone RGB keyboards
+Exec=loq-rgb
+Icon=input-keyboard
+Terminal=false
+Type=Application
+Categories=Utility;Settings;HardwareSettings;
+Keywords=keyboard;rgb;backlight;lenovo;loq;
+StartupNotify=false

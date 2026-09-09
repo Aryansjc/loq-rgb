@@ -1,0 +1,9 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Type=Application
+Name=LOQ RGB — apply profile at login
+Comment=Re-applies the active LOQ RGB profile after login
+Exec=loq-rgb-cli apply
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel

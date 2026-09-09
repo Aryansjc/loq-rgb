@@ -1,0 +1,42 @@
+# Maintainer: LOQ RGB contributors
+# PKGBUILD for the loq-rgb keyboard lighting controller (GUI + CLI).
+pkgname=loq-rgb
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="RGB keyboard lighting controller for Lenovo LOQ / Legion 4-zone ITE keyboards (048d:c9xx, CC/16 HID protocol). GUI + CLI."
+arch=('x86_64')
+url="https://github.com/Aryansjc/loq-rgb"
+license=('MIT')
+depends=('libusb' 'systemd-libs')
+makedepends=('cargo' 'rust' 'pkg-config')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+options=('!lto')
+
+build() {
+    cd "$srcdir/$pkgname-$pkgver"
+    cargo build --release --locked --frozen
+}
+
+check() {
+    cd "$srcdir/$pkgname-$pkgver"
+    cargo test --release --locked --frozen
+}
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+
+    install -Dm755 target/release/loq-rgb "$pkgdir/usr/bin/loq-rgb"
+    install -Dm755 target/release/loq-rgb-cli "$pkgdir/usr/bin/loq-rgb-cli"
+
+    install -Dm644 install/loq-rgb.desktop "$pkgdir/usr/share/applications/loq-rgb.desktop"
+    install -Dm644 install/loq-rgb-autostart.desktop \
+        "$pkgdir/usr/share/loq-rgb/loq-rgb-autostart.desktop"
+
+    # udev rule: ships in /usr/lib so upgrades replace it cleanly.
+    install -Dm644 install/60-loq-rgb.rules \
+        "$pkgdir/usr/lib/udev/rules.d/60-loq-rgb.rules"
+
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

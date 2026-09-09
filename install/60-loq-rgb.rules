@@ -1,0 +1,21 @@
+# loq-rgb: rootless access to the Lenovo 4-zone ITE RGB keyboard controller
+# (LOQ / Legion / IdeaPad Gaming, 2020-2024).
+# The lighting controller is USB VID 048d (ITE Tech); the PID identifies the
+# laptop generation. Only the lighting HID interface is opened — the key
+# matrix is a separate USB device and is never touched.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c993", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c983", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c995", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c994", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c985", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c984", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c975", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c973", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c965", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c963", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c955", MODE="0666", TAG+="uaccess"
+
+# Fn+Space profile cycling: read access to the "Ideapad extra buttons" input
+# node (VPC2004 ACPI). This node only carries Fn-combo keys (e.g. KEY_KBDILLUMUP
+# 240 = Fn+Space), never typed characters, so world-read is acceptable here.
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="Ideapad extra buttons", MODE="0666", TAG+="uaccess"
