@@ -92,12 +92,26 @@ impl WriterLock {
     }
 }
 
-/// Read who currently owns the lock without taking it.
+/// Read who currently owns the lock, verifying that the lock is *actually*
+/// held. A lock file left behind by a crashed or exited process reports
+/// `None` rather than a phantom owner.
 pub fn probe(dir: &Path) -> Option<LockOwner> {
     let path = dir.join(LOCK_FILENAME);
+    let mut file = OpenOptions::new().read(true).write(true).open(&path).ok()?;
+    let fd = file.as_raw_fd();
+
+    // Try to take the lock ourselves. Success means nobody held it, so we
+    // release immediately and report "not held".
+    // Linux: LOCK_EX=2, LOCK_NB=4, LOCK_UN=8.
+    let rc = unsafe { libc_flock(fd, 2 | 4) };
+    if rc == 0 {
+        unsafe { libc_flock(fd, 8) };
+        return None;
+    }
+
+    // Someone holds it: read the PID they recorded.
     let mut content = String::new();
-    let mut f = File::open(path).ok()?;
-    f.read_to_string(&mut content).ok()?;
+    file.read_to_string(&mut content).ok()?;
     let pid: u32 = content.trim().parse().ok()?;
     Some(LockOwner { pid })
 }
@@ -152,6 +166,39 @@ mod tests {
         // After drop the lock is free again.
         let again = WriterLock::acquire(dir.path()).unwrap();
         assert!(again.is_some(), "lock must be reusable after release");
+    }
+
+    #[test]
+    fn lock_stays_held_while_the_guard_is_alive() {
+        // Regression: the guard must be held for as long as the caller keeps
+        // it (the daemon kept a stale copy in an inner scope, so the lock was
+        // released immediately and two animators could run at once).
+        let dir = tempfile::tempdir().unwrap();
+        let guard = WriterLock::acquire(dir.path()).unwrap().expect("acquire");
+        // While `guard` is alive, another acquire is refused and probe sees us.
+        assert!(
+            WriterLock::acquire(dir.path()).unwrap().is_none(),
+            "second writer must be refused while the guard is alive"
+        );
+        assert!(probe(dir.path()).is_some());
+        drop(guard);
+        assert!(
+            probe(dir.path()).is_none(),
+            "released lock must report unheld"
+        );
+    }
+
+    #[test]
+    fn probe_reports_stale_lock_file_as_unheld() {
+        // A lock file whose owner has exited must NOT look like a live owner.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path()).unwrap();
+        std::fs::write(dir.path().join(LOCK_FILENAME), "999999\n").unwrap();
+        assert_eq!(
+            probe(dir.path()),
+            None,
+            "an unheld lock file must not report a phantom owner"
+        );
     }
 
     #[test]

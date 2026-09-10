@@ -13,6 +13,17 @@ fn cli(xdg_home: &Path, args: &[&str]) -> Output {
         .expect("run loq-rgb-cli")
 }
 
+/// Run the CLI with an isolated `HOME` too (the autostart entry lives under
+/// `~/.config/autostart`, outside XDG_CONFIG_HOME in some setups).
+fn cli_with_home(home: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_loq-rgb-cli"))
+        .args(args)
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .output()
+        .expect("run loq-rgb-cli")
+}
+
 fn stdout(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).to_string()
 }
@@ -293,4 +304,61 @@ fn udev_print_contains_the_rule() {
     let out = stdout(&o);
     assert!(out.contains("SUBSYSTEM==\"hidraw\""));
     assert!(out.contains("ATTRS{idProduct}==\"c993\""));
+}
+
+#[test]
+fn autostart_installs_an_entry_with_an_absolute_exec() {
+    let home = tempfile::tempdir().unwrap();
+    let o = cli_with_home(home.path(), &["autostart"]);
+    assert!(o.status.success(), "stderr: {}", stderr(&o));
+
+    let entry = home.path().join(".config/autostart/loq-rgb.desktop");
+    assert!(
+        entry.exists(),
+        "entry must be written to ~/.config/autostart"
+    );
+    let body = std::fs::read_to_string(&entry).unwrap();
+
+    // Must run the animator (not the one-shot apply)...
+    assert!(body.contains("listen-hotkeys"), "body: {body}");
+    // ...via an absolute path, so a login PATH without ~/.local/bin still works.
+    let exec_line = body
+        .lines()
+        .find(|l| l.starts_with("Exec="))
+        .expect("Exec line");
+    let command = exec_line.trim_start_matches("Exec=");
+    let binary = command.split_whitespace().next().unwrap();
+    assert!(
+        binary.starts_with('/'),
+        "Exec must use an absolute path, got {binary}"
+    );
+    assert!(
+        Path::new(binary).exists(),
+        "Exec binary must exist: {binary}"
+    );
+    // No bogus shebang or stray keys.
+    assert!(!body.starts_with('#'), "no shebang in a .desktop file");
+    assert!(body.starts_with("[Desktop Entry]"));
+}
+
+#[test]
+fn autostart_print_does_not_write_and_remove_cleans_up() {
+    let home = tempfile::tempdir().unwrap();
+    let entry = home.path().join(".config/autostart/loq-rgb.desktop");
+
+    let printed = cli_with_home(home.path(), &["autostart", "--print"]);
+    assert!(printed.status.success());
+    assert!(stdout(&printed).contains("[Desktop Entry]"));
+    assert!(!entry.exists(), "--print must not write the entry");
+
+    cli_with_home(home.path(), &["autostart"]);
+    assert!(entry.exists());
+    let removed = cli_with_home(home.path(), &["autostart", "--remove"]);
+    assert!(removed.status.success(), "stderr: {}", stderr(&removed));
+    assert!(!entry.exists(), "--remove must delete the entry");
+
+    // Removing again is harmless.
+    let again = cli_with_home(home.path(), &["autostart", "--remove"]);
+    assert!(again.status.success());
+    assert!(stdout(&again).contains("nothing to remove"));
 }

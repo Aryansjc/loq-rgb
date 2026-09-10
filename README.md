@@ -106,10 +106,11 @@ sudo loq-rgb-cli udev     # refresh the udev rule, then reload/trigger udev
 ### Uninstall
 
 ```sh
+loq-rgb-cli autostart --remove        # stop running at login
 sudo rm /usr/local/bin/loq-rgb /usr/local/bin/loq-rgb-cli
 sudo rm /usr/lib/udev/rules.d/60-loq-rgb.rules /etc/udev/rules.d/60-loq-rgb.rules
 sudo udevadm control --reload-rules
-rm -f ~/.config/autostart/loq-rgb-autostart.desktop
+rm -f ~/.config/autostart/loq-rgb.desktop ~/.config/autostart/loq-rgb-autostart.desktop
 rm -rf ~/.config/loq-rgb
 ```
 
@@ -208,6 +209,8 @@ loq-rgb-cli apply                                                    # re-apply 
 loq-rgb-cli udev                # install the device permission rule
 loq-rgb-cli udev --print        # print the rule without installing
 loq-rgb-cli listen-hotkeys      # background animator + Fn+Space cycling
+loq-rgb-cli autostart           # run at login (see below)
+loq-rgb-cli autostart --remove  # stop running at login
 ```
 
 A single colour fills all zones; several colours assign zone 1, zone 2, …
@@ -253,21 +256,35 @@ Consequences:
 
 ---
 
-## Fn+Space profile cycling (and apply at login)
+## Run automatically at login (recommended)
 
-On the verified hardware, Fn+Space reaches the OS as a key event and does
-*not* cycle natively while software control is active, so a small daemon can
-own the key. Start it once:
+Install the autostart entry once:
 
 ```sh
-loq-rgb-cli listen-hotkeys
+loq-rgb-cli autostart
 ```
 
-It applies the active profile at startup and then **Fn+Space cycles through
-your saved profiles in alphabetical order, ends with a full Off step, and
-wraps back to the first profile**.
+This writes `~/.config/autostart/loq-rgb.desktop` pointing at the **absolute
+path** of your `loq-rgb-cli`, so it works regardless of the login `PATH`
+(desktop sessions do not always include `~/.local/bin`). From your next login
+onwards it will:
 
-To run it automatically at login:
+- apply your active profile,
+- keep the colour wave running (including after you close the GUI), and
+- provide Fn+Space profile cycling.
+
+Related commands:
+
+```sh
+loq-rgb-cli autostart --print     # show the entry without writing it
+loq-rgb-cli autostart --remove    # stop running at login
+```
+
+The login command is `loq-rgb-cli listen-hotkeys` — you can run that by hand
+to test it immediately without logging out.
+
+You can also copy the shipped entry (it relies on `loq-rgb-cli` being on
+`PATH`, e.g. a packaged install):
 
 ```sh
 cp install/loq-rgb-autostart.desktop ~/.config/autostart/
@@ -275,6 +292,12 @@ cp install/loq-rgb-autostart.desktop ~/.config/autostart/
 
 Notes:
 
+- Only one instance can run: a second `listen-hotkeys` (or a second login
+  session) is refused by the single-writer lock, naming the process that
+  already owns the lighting. This is what prevents flicker.
+- If you open the GUI while the background animator is running, the GUI leaves
+  frame-writing to it and says so in the status bar. If the animator stops
+  while the GUI is open, the GUI starts a new one.
 - "Off" is a reserved profile name (the final cycle step, added
   automatically). It cannot be deleted or renamed.
 - The Fn+Space key node only carries Fn-combo keys — never typed characters —

@@ -34,6 +34,45 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="c955", MODE="06
 
 const UDEV_TARGET: &str = "/etc/udev/rules.d/60-loq-rgb.rules";
 
+/// Autostart entry body. `Exec` is filled in with the absolute path of the
+/// running binary so it works regardless of the login `PATH` (desktop
+/// sessions do not necessarily include `~/.local/bin`).
+fn autostart_desktop_file(exe: &std::path::Path) -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=LOQ RGB\n\
+         Comment=Applies your keyboard RGB profile at login, keeps the colour wave \
+         running and handles Fn+Space profile cycling\n\
+         Exec={} listen-hotkeys\n\
+         Terminal=false\n\
+         X-GNOME-Autostart-enabled=true\n\
+         X-KDE-autostart-after=panel\n",
+        exe.display()
+    )
+}
+
+/// `~/.config/autostart` (respecting `XDG_CONFIG_HOME`).
+fn autostart_dir() -> std::path::PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
+        && !xdg.is_empty()
+    {
+        return std::path::PathBuf::from(xdg).join("autostart");
+    }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        return std::path::PathBuf::from(home)
+            .join(".config")
+            .join("autostart");
+    }
+    std::path::PathBuf::from("autostart")
+}
+
+fn autostart_entry_path() -> std::path::PathBuf {
+    autostart_dir().join("loq-rgb.desktop")
+}
+
 #[derive(Parser)]
 #[command(
     name = "loq-rgb-cli",
@@ -86,6 +125,15 @@ enum Command {
     DumpPacket(ConfigArgs),
     /// Listen for Fn+Space and cycle through the saved profiles.
     ListenHotkeys,
+    /// Install (or remove) the "run at login" autostart entry.
+    Autostart {
+        /// Remove the autostart entry instead of installing it.
+        #[arg(long)]
+        remove: bool,
+        /// Show the entry that would be written, without writing it.
+        #[arg(long)]
+        print: bool,
+    },
     /// Install (or print) the udev rule granting user access to the device.
     Udev {
         /// Print the rule to stdout instead of writing it.
@@ -170,6 +218,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
         Command::Diagnose => cmd_diagnose(),
         Command::DumpPacket(args) => cmd_dump_packet(args),
         Command::ListenHotkeys => cmd_listen_hotkeys(),
+        Command::Autostart { remove, print } => cmd_autostart(*remove, *print),
         Command::Udev { print } => cmd_udev(*print),
     }
 }
@@ -508,21 +557,18 @@ fn cmd_listen_hotkeys() -> Result<(), Error> {
     let target_name = loq_rgb::hotkey::IDEAPAD_BUTTONS_NAME;
 
     // Single-writer lock: the daemon is the background animator. A second
-    // instance would fight the first and cause visible flicker.
+    // instance would fight the first and cause visible flicker. The guard is
+    // bound for the whole function, so the lock is held while we loop and
+    // released when this daemon exits.
     let lock_dir = loq_rgb::instance::default_lock_dir();
-    match loq_rgb::instance::WriterLock::acquire(&lock_dir)? {
-        Some(lock) => {
-            let _keep_alive = lock; // held for the lifetime of the loop
-        }
-        None => {
-            let owner = loq_rgb::instance::probe(&lock_dir)
-                .map(|o| o.pid.to_string())
-                .unwrap_or_else(|| "unknown".into());
-            return Err(Error::AlreadyRunning(format!(
-                "pid {owner} already holds the lighting writer lock"
-            )));
-        }
-    }
+    let Some(_writer_lock) = loq_rgb::instance::WriterLock::acquire(&lock_dir)? else {
+        let owner = loq_rgb::instance::probe(&lock_dir)
+            .map(|o| o.pid.to_string())
+            .unwrap_or_else(|| "unknown".into());
+        return Err(Error::AlreadyRunning(format!(
+            "pid {owner} already holds the lighting writer lock"
+        )));
+    };
 
     let mut controller: Option<Controller> = None;
     let mut active_cfg: Option<LightingConfig> = None;
@@ -701,6 +747,59 @@ fn open_nonblocking(path: &str) -> Option<std::fs::File> {
     // O_NONBLOCK = 0x800 on Linux.
     o.read(true).custom_flags(0x800);
     o.open(path).ok()
+}
+
+fn cmd_autostart(remove: bool, print_only: bool) -> Result<(), Error> {
+    let entry_path = autostart_entry_path();
+
+    if print_only {
+        let exe =
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("loq-rgb-cli"));
+        println!("{}", autostart_desktop_file(&exe));
+        println!("# entry path: {}", entry_path.display());
+        return Ok(());
+    }
+
+    if remove {
+        return match std::fs::remove_file(&entry_path) {
+            Ok(()) => {
+                println!("removed {}", entry_path.display());
+                println!("the keyboard will no longer be configured automatically at login");
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!(
+                    "no autostart entry at {} (nothing to remove)",
+                    entry_path.display()
+                );
+                Ok(())
+            }
+            Err(e) => Err(Error::Io(format!(
+                "cannot remove {}: {e}",
+                entry_path.display()
+            ))),
+        };
+    }
+
+    // Install: resolve this binary's absolute path so the entry does not
+    // depend on the login PATH, which often differs from a terminal's.
+    let exe = std::env::current_exe()
+        .map_err(|e| Error::Io(format!("cannot determine the path of this binary: {e}")))?;
+
+    std::fs::create_dir_all(autostart_dir())
+        .map_err(|e| Error::Io(format!("cannot create {}: {e}", autostart_dir().display())))?;
+
+    std::fs::write(&entry_path, autostart_desktop_file(&exe))
+        .map_err(|e| Error::Io(format!("cannot write {}: {e}", entry_path.display())))?;
+
+    println!("wrote {}", entry_path.display());
+    println!("login command: {} listen-hotkeys", exe.display());
+    println!();
+    println!("At login this applies your active profile, keeps the colour wave");
+    println!("running and enables Fn+Space profile cycling.");
+    println!("It takes effect from your next login. To test it now:");
+    println!("  {} listen-hotkeys", exe.display());
+    Ok(())
 }
 
 fn cmd_udev(print_only: bool) -> Result<(), Error> {
