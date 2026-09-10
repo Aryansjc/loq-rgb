@@ -75,8 +75,8 @@ fn every_effect_on_every_zone_slot() {
         Effect::Off,
         Effect::Static,
         Effect::Breath,
-        Effect::WaveLeft,
-        Effect::WaveRight,
+        Effect::FlowLeft,
+        Effect::FlowRight,
         Effect::Smooth,
     ] {
         for zone in 0..4 {
@@ -106,8 +106,8 @@ fn single_global_effect_byte_is_enforced() {
         Effect::Off,
         Effect::Static,
         Effect::Breath,
-        Effect::WaveLeft,
-        Effect::WaveRight,
+        Effect::FlowLeft,
+        Effect::FlowRight,
         Effect::Smooth,
     ] {
         let cfg = LightingConfig {

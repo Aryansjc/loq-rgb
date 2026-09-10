@@ -202,42 +202,40 @@ fn effects_are_visibly_correct() {
     restore_white(&d);
 }
 
-/// Pin the byte↔visual mapping for the two wave direction flags. This test
-/// either confirms the app's current labels or forces a one-line fix in
-/// `packet.rs` before the GUI can mislabel the effect.
+/// Verify the colour wave's direction is what the UI claims. The wave is
+/// host-rendered, so the app itself must be writing frames during this test
+/// (run it with the GUI open, or with `listen-hotkeys` running and a
+/// colour-wave profile active).
 #[test]
 #[ignore]
-fn wave_direction_flags_match_labels() {
+fn colour_wave_directions_match_labels() {
     let d = open_or_abort();
 
     d.send(&LightingConfig {
-        effect: Effect::WaveLeft,
-        speed: 3,
+        effect: Effect::FlowLeft,
+        speed: 2,
         brightness: 2,
         ..LightingConfig::default()
     })
     .unwrap();
-    pause("A wave should now be sweeping across the keyboard.");
-    let left_ok = ask("Did the wave travel LEFT (towards Esc / away from the arrow keys)?");
+    pause(
+        "Start the animator now (GUI open, or `loq-rgb-cli listen-hotkeys` with a \
+         colour-wave profile active) and watch the movement.",
+    );
+    let left_ok = ask("Does the colour wave travel LEFT (towards Esc)?");
 
     d.send(&LightingConfig {
-        effect: Effect::WaveRight,
-        speed: 3,
+        effect: Effect::FlowRight,
+        speed: 2,
         brightness: 2,
         ..LightingConfig::default()
     })
     .unwrap();
-    let right_ok = ask("Did the wave travel RIGHT (towards the arrow keys)?");
+    let right_ok = ask("Does the colour wave travel RIGHT (towards the arrow keys)?");
 
     restore_white(&d);
-    assert!(
-        left_ok,
-        "wave-left travelled the wrong way — fix packet.rs flag mapping"
-    );
-    assert!(
-        right_ok,
-        "wave-right travelled the wrong way — fix packet.rs flag mapping"
-    );
+    assert!(left_ok, "colour wave ← travelled the wrong way");
+    assert!(right_ok, "colour wave → travelled the wrong way");
 }
 
 /// Brightness byte semantics: level 2 should be visibly brighter than 1.

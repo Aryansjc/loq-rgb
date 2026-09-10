@@ -75,39 +75,19 @@ pub const EFFECTS: &[EffectInfo] = &[
         blurb: "All four zone colours pulse in sync.",
     },
     EffectInfo {
-        effect: Effect::WaveLeft,
-        label: "Wave → left",
-        blurb: "Multicolour wave sweeping leftwards. The four zone colours form the wave's palette.",
-    },
-    EffectInfo {
-        effect: Effect::WaveRight,
-        label: "Wave → right",
-        blurb: "Multicolour wave sweeping rightwards. The four zone colours form the wave's palette.",
-    },
-    EffectInfo {
-        effect: Effect::RainbowLeft,
-        label: "Rainbow wave → left",
-        blurb: "Full-spectrum wave sweeping leftwards with an automatic rainbow palette.",
-    },
-    EffectInfo {
-        effect: Effect::RainbowRight,
-        label: "Rainbow wave → right",
-        blurb: "Full-spectrum wave sweeping rightwards with an automatic rainbow palette.",
-    },
-    EffectInfo {
         effect: Effect::FlowLeft,
         label: "Colour wave ←",
-        blurb: "HOST-RENDERED moving colour wave. Your zone colours are the blocks of the wave (full colour spectrum if all four are identical); they glide leftwards with smooth blends. Runs while the GUI or the listener daemon is active.",
+        blurb: "Continuous moving colour wave, leftwards. Your four zone colours are its colour blocks (the full spectrum when all four are identical), gliding with smooth blends and no waiting between colours.",
     },
     EffectInfo {
         effect: Effect::FlowRight,
         label: "Colour wave →",
-        blurb: "HOST-RENDERED moving colour wave. Your zone colours are the blocks of the wave (full colour spectrum if all four are identical); they glide rightwards with smooth blends. Runs while the GUI or the listener daemon is active.",
+        blurb: "Continuous moving colour wave, rightwards. Your four zone colours are its colour blocks (the full spectrum when all four are identical), gliding with smooth blends and no waiting between colours.",
     },
     EffectInfo {
         effect: Effect::Smooth,
         label: "Smooth flow",
-        blurb: "Whole keyboard shifts smoothly through colours over time.",
+        blurb: "The whole keyboard shifts smoothly through colours over time (one colour at a time).",
     },
 ];
 
@@ -146,10 +126,6 @@ mod tests {
             Effect::Off,
             Effect::Static,
             Effect::Breath,
-            Effect::WaveLeft,
-            Effect::WaveRight,
-            Effect::RainbowLeft,
-            Effect::RainbowRight,
             Effect::FlowLeft,
             Effect::FlowRight,
             Effect::Smooth,
@@ -160,28 +136,33 @@ mod tests {
     }
 
     #[test]
+    fn only_one_wave_family_is_exposed() {
+        // The stepped firmware wave (0x04) must not be user-selectable: the
+        // colour wave replaces it.
+        let wave_like: Vec<&EffectInfo> = EFFECTS
+            .iter()
+            .filter(|e| e.label.to_lowercase().contains("wave"))
+            .collect();
+        assert_eq!(wave_like.len(), 2, "exactly the two colour-wave directions");
+        for info in wave_like {
+            assert!(info.effect.is_host_rendered(), "{:?}", info.effect);
+        }
+    }
+
+    #[test]
     fn colour_editing_policy_matches_firmware() {
-        // User palette editable for static, breathing, the palette waves and
-        // the host colour-flow wave.
+        // User palette editable for static, breathing and the colour wave.
         for e in [
             Effect::Static,
             Effect::Breath,
-            Effect::WaveLeft,
-            Effect::WaveRight,
             Effect::FlowLeft,
             Effect::FlowRight,
         ] {
             assert!(zone_colors_editable(e), "{e:?}");
             assert_eq!(zone_colors_disabled_reason(e), None);
         }
-        // Off, rainbow waves and smooth use their own visuals — user zone
-        // colours are not editable.
-        for e in [
-            Effect::Off,
-            Effect::RainbowLeft,
-            Effect::RainbowRight,
-            Effect::Smooth,
-        ] {
+        // Off and smooth use their own visuals.
+        for e in [Effect::Off, Effect::Smooth] {
             assert!(!zone_colors_editable(e), "{e:?}");
             assert_eq!(
                 zone_colors_disabled_reason(e),

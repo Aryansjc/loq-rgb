@@ -34,21 +34,35 @@ keys, never typed characters.
 
 **Zones (left panel).** Four swatches map to the four keyboard zones,
 left → right. Click a swatch (or a band on the keyboard preview) to edit that
-zone. When the effect is Static or Breathing you get a full colour editor:
-hue strip + saturation/value square + hex field, and a "Save to palette"
-button for custom colours. Editing one zone never resets the others — every
-change re-sends the full config built from what you currently see.
+zone. When the effect uses zone colours (Static, Breathing, Colour wave) you
+get a full colour editor: hue strip + saturation/value square + hex field, and
+a "Save to palette" button for custom colours. Editing one zone never resets
+the others — every change re-sends the full config built from what you
+currently see.
 
 **Effects (centre).** One global effect drives the whole keyboard; this is a
-hardware fact, stated in the UI. When you pick Wave ←/→ or Smooth flow the
-zone colour editors disable with the reason: those effects use fixed
-firmware palettes and ignore zone colours. Speed (1–4) applies to animated
-effects; brightness is Low/High.
+hardware fact, stated in the UI. The choices are Off, Static, Breathing,
+**Colour wave ←/→** (the continuous multicolour wave) and Smooth flow. For
+Smooth flow the zone colour editors disable with the reason: that effect
+drives its own single colour. Speed (1–4) sets the animation tempo; brightness
+is Low/High.
+
+**Colour wave modes.** With four different zone colours the wave uses them as
+its moving colour blocks. With four identical zone colours (the untouched
+default) it shows the full colour spectrum instead.
 
 **Profiles.** A profile stores the entire keyboard configuration (effect +
 speed + brightness + four zone colours). Switch profiles from the dropdown;
 "Save current as this profile" overwrites the active profile; "Save as…"
-creates a new one.
+creates a new one; "Rename…" renames it. Edits are saved to the active
+profile automatically, so the CLI, the background animator and the next start
+all see exactly what you see.
+
+**Background animator.** The colour wave is rendered by software, so the app
+starts a small background process the first time you select it. That process
+keeps the wave moving after you close the window and also provides Fn+Space
+cycling. Only one writer may run at a time; the status bar tells you who is in
+charge.
 
 **Status bar (bottom).** Shows when the last config was sent to hardware,
 an "Apply now" button, and "Read state from keyboard" — where the controller
@@ -76,19 +90,13 @@ loq-rgb-cli apply --colors ff8000
 # breathing, slow, high brightness
 loq-rgb-cli apply --effect breath --speed 1 --brightness 2 --colors "#1a2b3c,#4d5e6f"
 
-# waves are multicolour: the four zone colours ARE the wave's palette
-loq-rgb-cli apply --effect wave-right --speed 4 --colors ff0000,ff8800,ffee00,00ffcc
+# the continuous colour wave: your four zone colours are its colour blocks
+# (the full spectrum when all four are identical). Use --speed 1..4.
+loq-rgb-cli apply --effect flow-right --speed 3 --colors ff0000,ff8800,ffee00,00ffcc
+loq-rgb-cli apply --effect flow-left  --speed 2
 
-# rainbow waves use an automatic spectrum palette
-loq-rgb-cli apply --effect rainbow-left --speed 3
-
-# smooth flow
+# smooth flow: the whole keyboard shifts through colours over time
 loq-rgb-cli apply --effect smooth
-
-# HOST-RENDERED colour flow: the full colour wheel flows continuously.
-# Animates while the GUI or `listen-hotkeys` runs.
-loq-rgb-cli apply --effect flow-right --speed 3
-loq-rgb-cli apply --effect flow-left
 
 loq-rgb-cli apply --effect off
 
@@ -131,9 +139,9 @@ Human-editable:
 }
 ```
 
-Effect names: `off`, `static`, `breath`, `wave-left`, `wave-right`,
-`rainbow-left`, `rainbow-right`, `flow-left`, `flow-right`, `smooth`.
-Invalid values are clamped on load; a corrupt file is backed up
+Effect names: `off`, `static`, `breath`, `flow-left`, `flow-right`, `smooth`
+(legacy `wave-*` / `rainbow-*` names are accepted and map onto the colour
+wave). Invalid values are clamped on load; a corrupt file is backed up
 (`config.json.corrupt-<ts>`) and defaults restored — never silently deleted.
 Writes are atomic (temp file + rename). The reserved `Off` profile ends the
 Fn+Space cycle and cannot be deleted; deleting the active profile moves the

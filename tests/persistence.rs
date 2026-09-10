@@ -78,7 +78,7 @@ fn many_restart_cycles_stay_byte_stable() {
                     effect: if i % 2 == 0 {
                         Effect::Smooth
                     } else {
-                        Effect::WaveLeft
+                        Effect::FlowLeft
                     },
                     speed: 1 + (i % 4) as u8,
                     brightness: 1 + (i % 2) as u8,

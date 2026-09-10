@@ -367,7 +367,7 @@ mod tests {
         cfg.profiles.insert(
             "wild".into(),
             LightingConfig {
-                effect: Effect::WaveLeft,
+                effect: Effect::FlowLeft,
                 speed: 99,
                 brightness: 99,
                 ..LightingConfig::default()

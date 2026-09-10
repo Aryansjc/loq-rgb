@@ -64,13 +64,12 @@ live round trip on this unit settles any ambiguity.)
 | Per-zone independent/mixed effects (z1 breath + z2 static) | ❌ | ❌ (not faked) | single global effect byte |
 | Static | ✅ | ✅ | `0x01` — visually verified |
 | Breathing (all zones in sync) | ✅ | ✅ | `0x03` — visually verified |
-| Wave left / right (palette-driven band) | ✅ | ✅ | `0x04` + direction flag (byte 19 = left, 18 = right, verified); renders from the four zone-colour bytes (verified) — the zone colours are the wave's palette |
-| Rainbow wave left / right | ✅ | ✅ | wave engine with an automatic spectrum palette |
-| **Colour flow left / right** (continuous full-wheel gradient) | ❌ firmware | ✅ host-rendered | no firmware code exists (all undocumented codes probed & inert); this app draws ~25 static frames/s. Runs only while the GUI or `listen-hotkeys` daemon is active |
+| Firmware wave band (`0x04`) | ✅ exists | ❌ deliberately not exposed | steps one colour at a time; replaced by the colour wave below |
+| **Colour wave left / right** (continuous multicolour) | ❌ firmware | ✅ host-rendered | no firmware code exists (all undocumented codes probed & inert); the app draws ~25 static frames/s. A background animator keeps it running after the GUI closes |
 | Smooth flow | ✅ | ✅ | `0x06` — whole keyboard, one colour shifting over time (verified) |
 | Effect codes `0x02`, `0x05`, `0x07`–`0x0A` | ❌ inert | probe-only | interactive probe test provided; not exposed in UI |
 | Full 24-bit colour | ✅ | ✅ | free picker, not preset-only |
-| Brightness byte | ❌ **ignored by firmware** | ✅ via emulation | Low = host-side dimming ×0.6 of the colour bytes we control (static/breath/wave/rainbow/colour flow); visually verified; smooth flow cannot be dimmed and is labelled so |
+| Brightness byte | ❌ **ignored by firmware** | ✅ via emulation | Low = host-side dimming ×0.6 of the colour bytes we control (static/breath/colour wave); visually verified; smooth flow cannot be dimmed and is labelled so |
 | Speed | 1–4 | ✅ | animated effects |
 | Off | ✅ | ✅ | `0x00` + brightness 0 — visually verified |
 | Read lighting state back | ❌ on this unit | read-only app fallback | CC GET returns an 11-byte identity report (contains PID), not lighting state; app tracks last-applied config instead |
@@ -84,19 +83,19 @@ returning success was never treated as proof:
 
 1. Static 4 colours (red/green/blue/white) → zones 1–4 lit left→right exactly as configured. ✅
 2. Breathing with four zone colours → all zones pulse in sync. ✅
-3. `wave-left` → wave sweeps left. ✅ (byte 19)
-4. `wave-right` → wave sweeps right. ✅ (byte 18)
-5. Smooth flow → continuous colour animation. ✅
-6. Brightness byte: Low == High visually → byte ignored by this firmware. Emulated dimming (×0.6 zone colours) visibly darker. ✅
-7. Off (effect `0x00`) → backlight completely off. ✅
-8. Readback: CC GET returns 11-byte identity data (contains `93 c9` = the PID) — no lighting-state readback on this unit.
-9. Fn+Space reaches the OS: EV_KEY code 240 (`KEY_KBDILLUMUP`) on the "Ideapad extra buttons" input node (VPC2004 ACPI). ✅
-10. While software control is active, Fn+Space does NOT cycle lighting natively (pressing it changed nothing) — so a listener cleanly owns the key. Live-tested: cycling saved profiles ends with a full Off step and wraps. ✅
-11. Undocumented effect codes 0x02, 0x05, 0x07–0x0A are all inert — no hidden rainbow/flow effect exists in this firmware. ✅
-12. **The wave engine renders from the zone-colour bytes**: sending red/green/blue/white made the wave multicoloured (earlier tools zero those bytes, which is why waves looked plain). Wave → left/right with a user palette is real hardware behaviour. ✅
-13. Host-rendered Colour flow (full colour wheel, written as ~25 static frames/s) animates smoothly with exactly one writer. Multiple simultaneous writers (GUI + daemon, or two daemons) cause visible fighting/flicker — a documented operational rule. ✅
-14. Lenovo EC Fn-combos interrupt lighting from inside the EC (verified: toggling the camera kill-switch changes the keyboard effect); host flow re-writes frames every ~40 ms and recovers. ✅
-15. Final Colour-wave look, tuned live: **full-spectrum mode at speed 2** reads as the intended smooth moving rainbow. Palette-anchor mode (user's four colours as blocks) is coarser and visually less preferred on this hardware — both remain available; every "glitch" report traced to a second writer, never the renderer. Daemon cost: 0.1% CPU, 3.7 MB RSS. ✅
+3. Firmware wave band (`0x04`): sweeps left/right and renders from the four zone-colour bytes, but steps one colour at a time. Deliberately not exposed — replaced by the colour wave. ✅ (behaviour identified)
+4. Smooth flow → one colour shifting across the whole keyboard. ✅
+5. Brightness byte: Low == High visually → byte ignored by this firmware. Emulated dimming (×0.6 zone colours) visibly darker. ✅
+6. Off (effect `0x00`) → backlight completely off. ✅
+7. Readback: CC GET returns 11-byte identity data (contains `93 c9` = the PID) — no lighting-state readback on this unit.
+8. Fn+Space reaches the OS: EV_KEY code 240 (`KEY_KBDILLUMUP`) on the "Ideapad extra buttons" input node (VPC2004 ACPI). ✅
+9. While software control is active, Fn+Space does NOT cycle lighting natively (pressing it changed nothing) — so a listener cleanly owns the key. Live-tested: cycling saved profiles ends with a full Off step and wraps. ✅
+10. Undocumented effect codes 0x02, 0x05, 0x07–0x0A are all inert — no hidden rainbow/flow effect exists in this firmware. ✅
+11. **The wave engine renders from the zone-colour bytes**: sending red/green/blue/white made the firmware wave multicoloured (earlier tools zero those bytes, which is why waves looked plain). ✅
+12. Host-rendered colour wave (~25 static frames/s) animates smoothly with exactly one writer. Multiple simultaneous writers cause visible fighting/flicker — now prevented by the single-writer lock. ✅
+13. Lenovo EC Fn-combos interrupt lighting from inside the EC (verified: toggling the camera kill-switch changes the keyboard effect); the colour wave re-writes frames every ~40 ms and recovers. ✅
+14. Final colour-wave look, tuned live: **full-spectrum mode at speed 2** reads as the intended smooth moving rainbow. Palette mode (user's four colours as blocks) is coarser — both remain available. Daemon cost: 0.1% CPU, 3.7 MB RSS. ✅
+15. **The wave survives closing the GUI**: selecting a colour wave starts a background animator that holds the writer lock; closing the window leaves it running and the keyboard keeps animating. Verified live (animator pid alive with the lock, window gone, lighting still moving). ✅
 
 ## Honest answers to the design questions
 

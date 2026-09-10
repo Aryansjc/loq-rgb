@@ -144,41 +144,69 @@ impl<'de> Deserialize<'de> for Rgb {
 // Effects
 // ---------------------------------------------------------------------------
 
-/// Lighting effects. These are exactly the effect codes the 4-zone ITE
-/// firmware exposes (verified against the CC/16 protocol: 0x01 static,
-/// 0x03 breath, 0x04 wave with a direction flag, 0x06 smooth flow).
+/// Lighting effects.
 ///
-/// Naming note: `WaveLeft`/`WaveRight` describe the *visual sweep
-/// direction* as observed on hardware. Byte-level direction mapping is
-/// centralised in [`crate::packet`] so a single hardware observation can
-/// relabel it without touching anything else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[derive(Default)]
+/// The firmware exposes Off (0x00), Static (0x01), Breath (0x03) and Smooth
+/// flow (0x06). A true continuous multicolour wave does not exist in the
+/// firmware (every undocumented effect code was probed and is inert), so the
+/// wave is rendered by this software as a stream of real static frames —
+/// see [`crate::flow`]. The firmware's stepped palette/rainbow wave engine
+/// (0x04) is intentionally not exposed: it shows one colour at a time, which
+/// is the behaviour this project replaces.
+///
+/// Direction is a property of the variants below; bytes are centralised in
+/// [`crate::packet`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Effect {
     Off,
     #[default]
     Static,
     Breath,
-    WaveLeft,
-    WaveRight,
-    /// Full-spectrum wave: like the palette wave but the controller receives
-    /// an automatic rainbow palette. Verified on hardware that the wave
-    /// engine renders from the supplied zone-colour bytes.
-    RainbowLeft,
-    RainbowRight,
-    /// HOST-RENDERED continuous colour flow (leftwards/rightwards): the
-    /// firmware has no continuous multi-colour gradient effect (verified by
-    /// probing every undocumented effect code), so this effect is drawn by
-    /// this software — it continuously writes new static frames whose four
-    /// zone colours are samples of a moving colour gradient. The zone
-    /// colours act as the gradient's anchor palette. Honest label: the
-    /// animation only runs while the GUI or the `listen-hotkeys` daemon is
-    /// active, and transitions between the four physical zones are as smooth
-    /// as 4-zone hardware allows.
+    /// Host-rendered continuous colour wave, moving leftwards.
     FlowLeft,
+    /// Host-rendered continuous colour wave, moving rightwards.
     FlowRight,
     Smooth,
+}
+
+/// Legacy effect names accepted when loading older configuration files, so
+/// profiles saved before the wave was consolidated keep working:
+/// the firmware wave/rainbow effects map onto the host colour wave.
+fn effect_from_str(s: &str) -> Option<Effect> {
+    Some(match s {
+        "off" => Effect::Off,
+        "static" => Effect::Static,
+        "breath" | "breathing" => Effect::Breath,
+        "flow-left" => Effect::FlowLeft,
+        "flow-right" => Effect::FlowRight,
+        "smooth" | "smooth-flow" => Effect::Smooth,
+        // Legacy (firmware wave / rainbow wave) → host colour wave.
+        "wave-left" | "rainbow-left" => Effect::FlowLeft,
+        "wave-right" | "rainbow-right" => Effect::FlowRight,
+        _ => return None,
+    })
+}
+
+impl Serialize for Effect {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Effect {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = Effect;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an effect name such as \"static\" or \"flow-right\"")
+            }
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<Effect, E> {
+                effect_from_str(s).ok_or_else(|| E::custom(format!("unknown effect {s:?}")))
+            }
+        }
+        deserializer.deserialize_str(V)
+    }
 }
 
 impl std::fmt::Display for Effect {
@@ -187,10 +215,6 @@ impl std::fmt::Display for Effect {
             Effect::Off => "off",
             Effect::Static => "static",
             Effect::Breath => "breath",
-            Effect::WaveLeft => "wave-left",
-            Effect::WaveRight => "wave-right",
-            Effect::RainbowLeft => "rainbow-left",
-            Effect::RainbowRight => "rainbow-right",
             Effect::FlowLeft => "flow-left",
             Effect::FlowRight => "flow-right",
             Effect::Smooth => "smooth",
@@ -211,74 +235,45 @@ pub fn rainbow_zones() -> [Rgb; ZONE_COUNT] {
 }
 
 impl Effect {
-    /// Raw firmware code for this effect (0 when `Off`). Wave and rainbow
-    /// share the wave engine (0x04) and differ only in the palette bytes we
-    /// supply. Host-rendered flow effects emit static frames, so their code
-    /// is the static code (0x01).
+    /// Raw firmware code for this effect (0 when `Off`).
+    ///
+    /// Host-rendered wave frames are static packets (0x01) — the movement
+    /// comes from the software writing successive frames.
     pub fn code(self) -> u8 {
         match self {
             Effect::Off => 0x00,
-            Effect::Static => 0x01,
-            Effect::FlowLeft | Effect::FlowRight => 0x01,
+            Effect::Static | Effect::FlowLeft | Effect::FlowRight => 0x01,
             Effect::Breath => 0x03,
-            Effect::WaveLeft | Effect::WaveRight | Effect::RainbowLeft | Effect::RainbowRight => {
-                0x04
-            }
             Effect::Smooth => 0x06,
         }
     }
 
     /// Does the firmware read the per-zone colour bytes for this effect?
     ///
-    /// Hardware-verified on the LOQ 15IRX9: static and breath render each
-    /// zone's own colour, and the wave engine renders its moving pattern
-    /// from the four zone-colour bytes (sending red/green/blue/white made
-    /// the wave multicoloured). The host colour-flow effect uses the zone
-    /// colours as its moving wave palette too (falling back to the full
-    /// spectrum when they are all identical). Smooth flow drives its own
-    /// colour.
+    /// Static and breath render each zone's own colour; the host colour wave
+    /// uses the zone colours as its moving palette (falling back to the full
+    /// spectrum when all four are identical). Smooth drives its own colour.
     pub fn uses_zone_colors(self) -> bool {
         matches!(
             self,
-            Effect::Static
-                | Effect::Breath
-                | Effect::WaveLeft
-                | Effect::WaveRight
-                | Effect::FlowLeft
-                | Effect::FlowRight
+            Effect::Static | Effect::Breath | Effect::FlowLeft | Effect::FlowRight
         )
     }
 
-    /// Does the packet carry zone-colour bytes for this effect at all
-    /// (user palette for static/breath/wave/flow, auto rainbow palette for
-    /// the rainbow waves)? Smooth and Off do not.
+    /// Does the packet carry zone-colour bytes for this effect at all?
     pub fn writes_zone_bytes(self) -> bool {
         matches!(
             self,
-            Effect::Static
-                | Effect::Breath
-                | Effect::WaveLeft
-                | Effect::WaveRight
-                | Effect::RainbowLeft
-                | Effect::RainbowRight
-                | Effect::FlowLeft
-                | Effect::FlowRight
+            Effect::Static | Effect::Breath | Effect::FlowLeft | Effect::FlowRight
         )
     }
 
-    /// Is this an animation (breath/wave/rainbow/flow/smooth) whose speed
-    /// matters (a firmware byte, or the software tempo for host flow)?
+    /// Is this an animation whose speed setting means something (a firmware
+    /// byte for breath/smooth, or the software tempo for the colour wave)?
     pub fn is_animated(self) -> bool {
         matches!(
             self,
-            Effect::Breath
-                | Effect::WaveLeft
-                | Effect::WaveRight
-                | Effect::RainbowLeft
-                | Effect::RainbowRight
-                | Effect::FlowLeft
-                | Effect::FlowRight
-                | Effect::Smooth
+            Effect::Breath | Effect::FlowLeft | Effect::FlowRight | Effect::Smooth
         )
     }
 
@@ -287,18 +282,9 @@ impl Effect {
         matches!(self, Effect::FlowLeft | Effect::FlowRight)
     }
 
-    /// Does this effect need a direction (a firmware flag, or software
-    /// direction for host flow)?
+    /// Does this effect have a direction (the colour wave does)?
     pub fn needs_direction(self) -> bool {
-        matches!(
-            self,
-            Effect::WaveLeft
-                | Effect::WaveRight
-                | Effect::RainbowLeft
-                | Effect::RainbowRight
-                | Effect::FlowLeft
-                | Effect::FlowRight
-        )
+        matches!(self, Effect::FlowLeft | Effect::FlowRight)
     }
 }
 
@@ -441,36 +427,40 @@ mod tests {
         assert_eq!(Effect::Off.code(), 0x00);
         assert_eq!(Effect::Static.code(), 0x01);
         assert_eq!(Effect::Breath.code(), 0x03);
-        assert_eq!(Effect::WaveLeft.code(), 0x04);
-        assert_eq!(Effect::WaveRight.code(), 0x04);
-        assert_eq!(Effect::RainbowLeft.code(), 0x04);
-        assert_eq!(Effect::RainbowRight.code(), 0x04);
         assert_eq!(Effect::Smooth.code(), 0x06);
+        // The colour wave is host-rendered: its frames are static packets.
+        assert_eq!(Effect::FlowLeft.code(), 0x01);
+        assert_eq!(Effect::FlowRight.code(), 0x01);
     }
 
     #[test]
-    fn zone_colour_consumers_are_static_breath_wave_and_flow() {
-        // Static/breath render each zone's colour; hardware-verified that the
-        // wave engine also renders from the zone bytes (our palette). The
-        // host colour flow uses the zone colours as its wave palette too.
+    fn legacy_effect_names_load_as_the_colour_wave() {
+        // Configs saved before the wave consolidation must keep working.
+        for (legacy, expected) in [
+            ("wave-left", Effect::FlowLeft),
+            ("wave-right", Effect::FlowRight),
+            ("rainbow-left", Effect::FlowLeft),
+            ("rainbow-right", Effect::FlowRight),
+        ] {
+            let json = format!("\"{legacy}\"");
+            let parsed: Effect = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, expected, "{legacy}");
+        }
+        assert!(serde_json::from_str::<Effect>("\"nonsense\"").is_err());
+    }
+
+    #[test]
+    fn zone_colour_consumers_are_static_breath_and_the_wave() {
         for e in [
             Effect::Static,
             Effect::Breath,
-            Effect::WaveLeft,
-            Effect::WaveRight,
             Effect::FlowLeft,
             Effect::FlowRight,
         ] {
             assert!(e.uses_zone_colors(), "{e:?}");
         }
-        // Rainbow waves take an automatic palette; smooth and off draw their
-        // own visuals — the user's zone colours are not editable for these.
-        for e in [
-            Effect::Off,
-            Effect::RainbowLeft,
-            Effect::RainbowRight,
-            Effect::Smooth,
-        ] {
+        // Off and smooth draw their own visuals — zone colours are not editable.
+        for e in [Effect::Off, Effect::Smooth] {
             assert!(!e.uses_zone_colors(), "{e:?}");
         }
     }
@@ -480,10 +470,6 @@ mod tests {
         for e in [
             Effect::Static,
             Effect::Breath,
-            Effect::WaveLeft,
-            Effect::WaveRight,
-            Effect::RainbowLeft,
-            Effect::RainbowRight,
             Effect::FlowLeft,
             Effect::FlowRight,
         ] {
@@ -508,7 +494,7 @@ mod tests {
     #[test]
     fn normalized_clamps_and_off_keeps_colours() {
         let cfg = LightingConfig {
-            effect: Effect::WaveLeft,
+            effect: Effect::FlowLeft,
             speed: 99,
             brightness: 0,
             ..LightingConfig::default()
@@ -551,7 +537,9 @@ mod tests {
         for (e, s) in [
             (Effect::Off, "\"off\""),
             (Effect::Static, "\"static\""),
-            (Effect::WaveLeft, "\"wave-left\""),
+            (Effect::Breath, "\"breath\""),
+            (Effect::FlowLeft, "\"flow-left\""),
+            (Effect::FlowRight, "\"flow-right\""),
             (Effect::Smooth, "\"smooth\""),
         ] {
             assert_eq!(serde_json::to_string(&e).unwrap(), s);

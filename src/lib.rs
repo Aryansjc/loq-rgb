@@ -8,6 +8,7 @@
 pub mod backend;
 pub mod config;
 pub mod controller;
+pub mod daemon;
 pub mod detect;
 pub mod devices;
 pub mod effects;

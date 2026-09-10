@@ -45,14 +45,14 @@ fn dump_packet_matches_golden_bytes() {
 }
 
 #[test]
-fn dump_packet_wave_right_and_off() {
+fn colour_wave_frames_are_static_packets_and_off_golden() {
     let dir = tempfile::tempdir().unwrap();
     let wave = cli(
         dir.path(),
         &[
             "dump-packet",
             "--effect",
-            "wave-right",
+            "flow-right",
             "--speed",
             "4",
             "--brightness",
@@ -60,11 +60,23 @@ fn dump_packet_wave_right_and_off() {
         ],
     );
     assert!(wave.status.success());
-    // byte 18 (0-indexed within 33) = 01 → wave-right flag set.
+    // The wave is host-rendered: its frames are static packets (effect 0x01),
+    // never the firmware wave code, and no direction flag is used.
     let wave_out = stdout(&wave);
     let bytes: Vec<&str> = wave_out.trim().split(' ').collect();
-    assert_eq!(bytes[18], "01");
+    assert_eq!(bytes[2], "01", "wave frame is a static packet");
+    assert_eq!(bytes[18], "00");
     assert_eq!(bytes[19], "00");
+
+    // Legacy effect names still work (migrated to the colour wave).
+    let legacy = cli(dir.path(), &["dump-packet", "--effect", "wave-right"]);
+    assert!(legacy.status.success());
+    let legacy_out = stdout(&legacy);
+    let legacy_bytes: Vec<&str> = legacy_out.trim().split(' ').collect();
+    assert_eq!(
+        legacy_bytes[2], "01",
+        "legacy wave maps onto the colour wave"
+    );
 
     let off = cli(dir.path(), &["dump-packet", "--effect", "off"]);
     assert!(off.status.success());
@@ -161,7 +173,7 @@ fn bare_apply_reapplies_active_profile() {
             "--mock",
             "apply",
             "--effect",
-            "wave-left",
+            "flow-left",
             "--speed",
             "4",
             "--save",
@@ -174,7 +186,7 @@ fn bare_apply_reapplies_active_profile() {
     let apply = cli(dir.path(), &["--mock", "apply"]);
     assert!(apply.status.success(), "stderr: {}", stderr(&apply));
     let out = stdout(&apply);
-    assert!(out.contains("Wave → left"), "out: {out}");
+    assert!(out.contains("Colour wave ←"), "out: {out}");
     assert!(out.contains("speed: 4"), "out: {out}");
 }
 

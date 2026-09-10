@@ -68,6 +68,9 @@ struct App {
     last_flow_frame: Option<f64>,
     /// Set when the background daemon owns animation (single-writer rule).
     daemon_notice: Option<String>,
+    /// Whether we already tried to start the background animator for this
+    /// host-rendered session (prevents a spawn retry loop if it fails).
+    animator_spawn_attempted: bool,
 }
 
 impl App {
@@ -125,6 +128,7 @@ impl App {
             flow_phase: 0.0,
             last_flow_frame: None,
             daemon_notice: None,
+            animator_spawn_attempted: false,
         }
     }
 
@@ -181,6 +185,16 @@ impl App {
             Err(_) => {
                 // controller.last_error() carries the detail for the banner
             }
+        }
+        // Persist the active profile so the CLI, the background animator and
+        // the next start all see exactly what is on the keyboard. Wave frames
+        // are written by the animation loop, not here, so this never runs at
+        // frame rate.
+        let name = self.store.cfg.active_profile.clone();
+        if self.store.cfg.profiles.get(&name) != Some(&self.draft)
+            && let Err(e) = self.store.upsert_profile(&name, self.draft)
+        {
+            self.store_error = Some(e.to_string());
         }
     }
 }
@@ -370,27 +384,53 @@ impl App {
             self.flow_phase = 0.0;
             self.last_flow_frame = None;
             self.daemon_notice = None;
+            self.animator_spawn_attempted = false;
             return;
         }
 
         // Single-writer rule: if the background daemon holds the writer lock
         // it owns animation of host-rendered effects. This window must not
-        // write frames at the same time (that caused visible flicker).
+        // write frames at the same time (that caused visible flicker) — and,
+        // crucially, the daemon keeps the wave moving after this window is
+        // closed.
         let lock_dir = crate::instance::default_lock_dir();
         let owner =
             crate::instance::probe(&lock_dir).filter(|o| crate::instance::process_alive(o.pid));
         if let Some(owner) = owner {
             self.daemon_notice = Some(format!(
-                "The background daemon (pid {}) is animating the colour wave. It picks up \
-                 saved profile changes within ~1 s. To animate from this window instead, \
-                 stop it with: pkill -f 'loq-rgb-cli listen-hotkeys'",
+                "Background animator (pid {}) is driving the colour wave, and keeps it \
+                 running if you close this window. Saving a change? It is applied within \
+                 ~1 s. Stop it with: pkill -f 'loq-rgb-cli listen-hotkeys'",
                 owner.pid
             ));
             self.last_flow_frame = None;
             ctx.request_repaint_after(Duration::from_millis(500));
             return;
         }
-        self.daemon_notice = None;
+
+        // No background animator: start one so the wave keeps playing after
+        // this window closes. Try only once per host-rendered session so a
+        // failure falls back to window animation instead of a spawn loop.
+        if !self.animator_spawn_attempted {
+            self.animator_spawn_attempted = true;
+            match crate::daemon::spawn_background_animator() {
+                Ok(pid) => {
+                    self.daemon_notice = Some(format!(
+                        "Starting the background animator (pid {pid}) so the colour wave keeps \
+                         running when this window is closed."
+                    ));
+                    self.last_flow_frame = None;
+                    ctx.request_repaint_after(Duration::from_millis(500));
+                    return;
+                }
+                Err(e) => {
+                    self.daemon_notice = Some(format!(
+                        "Animating from this window (could not start the background animator: \
+                         {e}). The wave pauses when you close this window."
+                    ));
+                }
+            }
+        }
 
         let interval = crate::flow::FRAME_INTERVAL as f64;
         let elapsed = match self.last_flow_frame {
@@ -1019,30 +1059,17 @@ fn describe_state(state: &DeviceState) -> String {
     )
 }
 
-/// Direction of a wave-family effect (palette wave or rainbow wave), used to
-/// compare applied vs read-back state: readback cannot distinguish a rainbow
-/// wave from a palette wave carrying the same palette bytes.
-fn wave_family_direction(effect: Effect) -> Option<bool> {
-    match effect {
-        Effect::WaveLeft | Effect::RainbowLeft => Some(false),
-        Effect::WaveRight | Effect::RainbowRight => Some(true),
-        _ => None,
-    }
-}
-
 fn state_matches_config(state: &DeviceState, cfg: &LightingConfig) -> bool {
     let effect_matches = match state.effect {
         LiveEffect::Known(e) => {
-            e == cfg.effect || {
-                // Rainbow and palette waves are byte-identical on the wire.
-                let (a, b) = (wave_family_direction(e), wave_family_direction(cfg.effect));
-                a.is_some() && a == b
-            }
+            // A host-rendered wave writes static frames, so a readback during
+            // a wave legitimately reports Static.
+            e == cfg.effect || (cfg.effect.is_host_rendered() && e == Effect::Static)
         }
         LiveEffect::Unknown(_) => false,
     };
-    // Compare against the exact colour bytes we sent (dimmed at Low, rainbow
-    // palette for rainbow waves) so a readback of the LEDs still matches.
+    // Compare against the exact colour bytes we sent (dimmed at Low, current
+    // wave frame for the colour wave) so a readback of the LEDs still matches.
     let colours_match = if cfg.effect.writes_zone_bytes() {
         state.zones == crate::packet::led_zones(cfg)
     } else {
@@ -1093,16 +1120,16 @@ mod tests {
         };
         assert!(!state_matches_config(&different_effect, &cfg));
 
-        // Wave carries the palette bytes: a readback must show exactly the
-        // colours we sent (not black).
+        // The colour wave sends the current frame's colours: a readback must
+        // show exactly those bytes (not black), and a static readback of a
+        // wave frame matches because the frame IS a static packet.
         let wave_cfg = LightingConfig {
-            effect: Effect::WaveLeft,
+            effect: Effect::FlowLeft,
             ..cfg
         };
         let matching_wave = DeviceState {
-            effect: LiveEffect::Known(Effect::WaveLeft),
-            zones: [Rgb::new(255, 0, 0); 4],
-            flag_left: true,
+            effect: LiveEffect::Known(Effect::Static),
+            zones: crate::packet::led_zones(&wave_cfg),
             ..same
         };
         assert!(state_matches_config(&matching_wave, &wave_cfg));
@@ -1111,20 +1138,6 @@ mod tests {
             ..matching_wave
         };
         assert!(!state_matches_config(&wrong_palette, &wave_cfg));
-
-        // Rainbow readback is byte-identical to a palette wave; the wave
-        // family equivalence makes it still match.
-        let rainbow_cfg = LightingConfig {
-            effect: Effect::RainbowRight,
-            ..cfg
-        };
-        let rainbow_readback = DeviceState {
-            effect: LiveEffect::Known(Effect::WaveRight),
-            zones: crate::packet::auto_rainbow_palette(),
-            flag_right: true,
-            ..same
-        };
-        assert!(state_matches_config(&rainbow_readback, &rainbow_cfg));
 
         // Smooth flow: no colour bytes are sent, so anything reads as matching.
         let smooth_cfg = LightingConfig {

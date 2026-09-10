@@ -122,30 +122,44 @@ loq-rgb
 ```
 
 - **Effect** (centre column): one global effect drives the whole keyboard —
-  a hardware fact, stated in the UI. Pick from Off, Static, Breathing,
-  Wave ←/→, Rainbow wave ←/→, Smooth flow, or the host-rendered Colour
-  wave ←/→.
+  a hardware fact, stated in the UI. Choose from Off, Static, Breathing,
+  **Colour wave ←/→** (the continuous multicolour wave) and Smooth flow.
 - **Zones** (left panel): four swatches map to the four keyboard zones, left →
   right. Click one to edit it. When the effect uses zone colours (Static,
-  Breathing, Wave, Colour wave) you get the full colour editor: hue strip +
+  Breathing, Colour wave) you get the full colour editor: hue strip +
   saturation/value square + hex field, and "Save to palette" for colours you
   want to reuse. Editing one zone never resets the others.
-- **Colour wave palette note:** the host-rendered Colour wave uses your four
-  zone colours as its moving colour blocks. If all four zone colours are
-  identical (untouched default), it automatically shows the full colour
-  spectrum instead — pick different zone colours to make your own palette
-  wave.
+- **Colour wave palette note:** the wave uses your four zone colours as its
+  moving colour blocks. If all four zone colours are identical (the untouched
+  default), it automatically shows the full colour spectrum instead — pick
+  different zone colours to make your own palette wave.
 - **Profiles** (centre, below the effect list): a profile stores the complete
   keyboard configuration (effect + speed + brightness + four zone colours).
-  Use the dropdown to switch, "Save current as this profile" to overwrite the
-  active one, "Save as…" to create a new one, **"Rename…"** and **"Delete
-  profile"** (with confirmation; deleting the active profile moves the active
-  selection to another profile without changing the lighting).
+  Use the dropdown to switch profiles, "Save current as this profile",
+  "Save as…", **"Rename…"** and **"Delete profile"** (with confirmation;
+  deleting the active profile moves the active selection to another profile
+  without changing the lighting). **Edits are saved to the active profile
+  automatically**, so what you see is what the CLI and the next start use.
 - **Status bar** (bottom): shows when the last configuration was sent to the
   hardware, an "Apply now" button, a "Read state from keyboard" attempt, and
   any errors with hints.
 - Missing controller? The top bar says why and what to do (usually: install
   the udev rule). The app retries automatically.
+
+### Keeping the colour wave running
+
+The colour wave is rendered by software (no firmware effect produces it), so
+something must keep writing frames. The first time you select a colour wave,
+the app **starts a small background animator** — it keeps the wave moving
+even after you close the window, and also gives you Fn+Space profile cycling.
+The status bar tells you when the animator is in charge. To stop it:
+
+```sh
+pkill -f 'loq-rgb-cli listen-hotkeys'
+```
+
+Only one program may write to the keyboard at a time; the app enforces this
+with a lock, so you cannot accidentally run two animators.
 
 ### Colour picker
 
@@ -158,11 +172,11 @@ right-click one to remove it.
 - Per-zone effect mixing (e.g. breathing on zone 1, static on zone 2) — one
   global effect only.
 - Per-key RGB.
-- Zone colours for Smooth flow, Rainbow wave (automatic spectrum palette) —
-  those pickers are disabled with the reason shown.
-- Zone colours are NOT used for the firmware Rainbow wave or Smooth flow;
-  they ARE used for the Colour wave (as its palette) and for Wave (as the
-  band palette, verified on hardware).
+- Zone colours for Smooth flow — that picker is disabled with the reason
+  shown (Smooth flow drives its own single colour).
+- The firmware's stepped wave effect is not exposed: it shows one colour at a
+  time, which is exactly what the Colour wave replaces. Saved profiles that
+  used it load as the Colour wave.
 
 ---
 
@@ -177,10 +191,9 @@ loq-rgb-cli status            # what the controller reports (see limitations)
 # Set lighting
 loq-rgb-cli apply --effect static --colors ff0000,00ff00,0000ff,ffffff
 loq-rgb-cli apply --effect breath --speed 1 --brightness 2 --colors "#1a2b3c,#4d5e6f"
-loq-rgb-cli apply --effect wave-right --speed 4 --colors ff0000,ff8800,ffee00,00ffcc
-loq-rgb-cli apply --effect rainbow-left --speed 3
-loq-rgb-cli apply --effect smooth
-loq-rgb-cli apply --effect flow-right --speed 3     # host-rendered colour wave
+loq-rgb-cli apply --effect flow-right --speed 3     # continuous colour wave →
+loq-rgb-cli apply --effect flow-left  --speed 2     # continuous colour wave ←
+loq-rgb-cli apply --effect smooth                   # one colour shifting
 loq-rgb-cli apply --effect off
 
 # Profiles
@@ -194,11 +207,13 @@ loq-rgb-cli apply                                                    # re-apply 
 # System
 loq-rgb-cli udev                # install the device permission rule
 loq-rgb-cli udev --print        # print the rule without installing
-loq-rgb-cli listen-hotkeys      # run the Fn+Space cycling daemon
+loq-rgb-cli listen-hotkeys      # background animator + Fn+Space cycling
 ```
 
 A single colour fills all zones; several colours assign zone 1, zone 2, …
-left to right (fewer than four repeats the last colour).
+left to right (fewer than four repeats the last colour). The old names
+`wave-left`, `wave-right`, `rainbow-left`, `rainbow-right` are still accepted
+and map onto the colour wave, so existing scripts keep working.
 
 ### Effect and colour semantics per effect
 
@@ -207,15 +222,14 @@ left to right (fewer than four repeats the last colour).
 | `off` | — | — | — | backlight off |
 | `static` | per-zone colours | — | — | solid |
 | `breath` | per-zone colours | — | yes | all zones pulse in sync |
-| `wave-left` / `wave-right` | the wave band's palette (verified) | fixed | yes | firmware-rendered band |
-| `rainbow-left` / `rainbow-right` | automatic spectrum palette | fixed | yes | firmware-rendered band |
+| `flow-left` / `flow-right` | the wave's colour blocks, or the full spectrum when all four zone colours are identical | selectable | yes | **continuous colour wave** (host-rendered, see below) |
 | `smooth` | not used | — | yes | whole keyboard, one colour shifting |
-| `flow-left` / `flow-right` | colour-wave blocks, or full spectrum when all four are identical | selectable | yes | **host-rendered**, see below |
 
-Speed is `1` (slowest) .. `4`. Brightness is `1` (Low) / `2` (High) — on the
-verified hardware the brightness *byte* is ignored, so Low is emulated by
-dimming the colour bytes the app controls (static/breathing/wave/colour
-wave); Smooth flow cannot be dimmed and the UI says so.
+Speed is `1` (slowest) .. `4` — it sets the wave's tempo. Brightness is `1`
+(Low) / `2` (High) — on the verified hardware the brightness *byte* is
+ignored, so Low is emulated by dimming the colour bytes the app controls
+(static/breathing/colour wave); Smooth flow cannot be dimmed and the UI says
+so.
 
 ### The Colour wave is host-rendered (read this)
 
@@ -224,14 +238,17 @@ by probing every undocumented effect code). The Colour wave therefore renders
 in software: the app writes real frames (~25 per second) to the controller.
 Consequences:
 
-- It animates **only while the GUI is open or `loq-rgb-cli listen-hotkeys`
-  is running**; the last frame stays lit when they stop.
+- Something must be running to write those frames, so the app keeps a small
+  **background animator** alive. Selecting a colour wave starts it
+  automatically, and it continues after you close the GUI window. If it is
+  not running (e.g. you stopped it), the wave holds its last frame instead of
+  moving — start it again with `loq-rgb-cli listen-hotkeys`.
 - The four zones are four solid colour regions — a smooth *spatial* gradient
   inside a zone is a hardware limit. Motion between blocks is continuous
   (no delay, no visible loop restart).
 - **Only ONE lighting writer may run at a time.** A single-writer lock is
   built in: a second `listen-hotkeys` refuses to start, and the GUI detects
-  the daemon and leaves animation to it (it prints who is in control).
+  the animator and leaves frame-writing to it (it prints who is in control).
   Running two writers was the cause of every "flickering/glitching" report.
 
 ---
@@ -293,8 +310,9 @@ defaults restored — never silently destroyed.
 }
 ```
 
-Effect names: `off`, `static`, `breath`, `wave-left`, `wave-right`,
-`rainbow-left`, `rainbow-right`, `flow-left`, `flow-right`, `smooth`.
+Effect names: `off`, `static`, `breath`, `flow-left`, `flow-right`, `smooth`
+(legacy `wave-*` / `rainbow-*` names are also accepted and map onto the
+colour wave).
 
 ---
 
@@ -305,11 +323,17 @@ Effect names: `off`, `static`, `breath`, `wave-left`, `wave-right`,
   white-only backlight is not supported.
 - **"Permission denied opening the controller"** → run the one-time udev step
   above, then reconnect the keyboard or `sudo udevadm trigger`.
-- **Colour wave is not moving** → it only animates while the GUI or the
-  daemon runs. Start `loq-rgb-cli listen-hotkeys` (autostart available).
+- **Colour wave is not moving** → the background animator is not running.
+  Selecting a colour wave in the GUI starts it automatically; if you stopped
+  it, start it again with `loq-rgb-cli listen-hotkeys` (autostart available),
+  or reopen the GUI and pick the wave again.
+- **Colour wave stopped when I closed the GUI** → that happens only if the
+  background animator could not be started (the status bar says so). Run
+  `loq-rgb-cli listen-hotkeys` manually and check `$XDG_RUNTIME_DIR/loq-rgb/animator.log`.
 - **Lighting flickers or glitches** → exactly one writer must run. Check with
   `ps -ef | grep loq-rgb`; stop extras with
-  `pkill -f 'loq-rgb-cli listen-hotkeys'`.
+  `pkill -f 'loq-rgb-cli listen-hotkeys'`. The single-writer lock normally
+  prevents this.
 - **Fn+Space does nothing** → is the daemon running? Is the profile list
   non-empty? The key node needs the udev rule (see above).
 - **Keyboard changes by itself** → Lenovo EC Fn-combos (e.g. the camera
@@ -350,11 +374,13 @@ CC 16 <effect> <speed> <brightness> <zone1 RGB> <zone2 RGB> <zone3 RGB>
 <zone4 RGB> 00 <wave-right> <wave-left> 0…
 ```
 
-Effect codes: `0x00` off, `0x01` static, `0x03` breath, `0x04` wave (renders
-from the four zone-colour bytes — verified on hardware), `0x06` smooth flow.
-State readback is NOT available on the verified controller (the CC GET
-answers with an 11-byte identity report); the app tracks the last-applied
-configuration instead. Full evidence in `docs/hardware-report.md`.
+Effect codes: `0x00` off, `0x01` static, `0x03` breath, `0x04` the firmware's
+stepped wave (present in the protocol but not exposed by this app), `0x06`
+smooth flow. The colour wave is sent as a stream of `0x01` (static) frames
+whose colours advance every ~40 ms. State readback is NOT available on the
+verified controller (the CC GET answers with an 11-byte identity report); the
+app tracks the last-applied configuration instead. Full evidence in
+`docs/hardware-report.md`.
 
 ## License
 

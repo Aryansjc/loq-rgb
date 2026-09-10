@@ -129,12 +129,12 @@ fn parse_effect(s: &str) -> Result<Effect, String> {
         "off" => Ok(Effect::Off),
         "static" => Ok(Effect::Static),
         "breath" | "breathing" => Ok(Effect::Breath),
-        "wave-left" => Ok(Effect::WaveLeft),
-        "wave-right" => Ok(Effect::WaveRight),
-        "rainbow-left" => Ok(Effect::RainbowLeft),
-        "rainbow-right" => Ok(Effect::RainbowRight),
         "flow-left" => Ok(Effect::FlowLeft),
         "flow-right" => Ok(Effect::FlowRight),
+        // Legacy names (the firmware wave/rainbow were consolidated into the
+        // continuous colour wave) kept so older scripts keep working.
+        "wave-left" | "rainbow-left" => Ok(Effect::FlowLeft),
+        "wave-right" | "rainbow-right" => Ok(Effect::FlowRight),
         "smooth" | "smooth-flow" => Ok(Effect::Smooth),
         other => Err(format!(
             "unknown effect {other:?}; choose from: {}",
@@ -732,8 +732,6 @@ fn print_config(cfg: &LightingConfig) {
     );
     if !cfg.effect.writes_zone_bytes() {
         println!("zone colours: not sent (this effect drives its own visuals)");
-    } else if matches!(cfg.effect, Effect::RainbowLeft | Effect::RainbowRight) {
-        println!("zone colours: automatic rainbow palette");
     } else if cfg.effect.is_host_rendered() {
         if loq_rgb::flow::uses_palette(cfg) {
             println!("zone colours: palette mode — these colours are the wave's blocks");

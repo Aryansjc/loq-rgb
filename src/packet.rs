@@ -73,27 +73,18 @@ fn scale(c: u8) -> u8 {
     (c as f32 * DIMMING_FACTOR).round().clamp(0.0, 255.0) as u8
 }
 
-/// Automatic rainbow palette for the rainbow wave effects: four hues evenly
-/// spread around the wheel (red → yellow-green → cyan → violet-blue). The
-/// controller interpolates between the supplied colour samples as the wave
-/// moves. Defined in the model (pure colour math) and re-exported here.
-pub fn auto_rainbow_palette() -> [Rgb; ZONE_COUNT] {
-    crate::model::rainbow_zones()
-}
-
 /// The colour bytes actually written to the LEDs for a config.
 ///
-/// - User zone colours, dimmed by [`DIMMING_FACTOR`] at Low brightness, for
-///   static/breath and the palette waves.
-/// - The automatic rainbow palette (also dimmed at Low) for rainbow waves.
-/// - Untouched zone colours for smooth/off (their bytes are not sent).
+/// - User zone colours (dimmed by [`DIMMING_FACTOR`] at Low brightness) for
+///   static and breathing.
+/// - The colour wave's current frame for the host-rendered wave effects.
+/// - Zero bytes for smooth/off (their palette is not sent).
 ///
 /// Single source of truth used by the packet builder, the readback
 /// comparison and the GUI preview so "what you see" always equals "what is
 /// sent".
 pub fn led_zones(cfg: &LightingConfig) -> [Rgb; ZONE_COUNT] {
     let base = match cfg.effect {
-        Effect::RainbowLeft | Effect::RainbowRight => auto_rainbow_palette(),
         Effect::FlowLeft | Effect::FlowRight => crate::flow::frame_zones(cfg, 0.0),
         _ => return effective_zones(cfg),
     };
@@ -105,7 +96,7 @@ pub fn led_zones(cfg: &LightingConfig) -> [Rgb; ZONE_COUNT] {
 }
 
 /// User zone colours with Low-brightness dimming applied, for the effects
-/// that consume the user palette (static/breath/palette waves).
+/// that consume the user palette (static/breath).
 pub fn effective_zones(cfg: &LightingConfig) -> [Rgb; ZONE_COUNT] {
     let mut out = cfg.zones;
     if cfg.brightness == 1 && cfg.effect.writes_zone_bytes() {
@@ -129,21 +120,18 @@ pub fn build_packet(cfg: &LightingConfig) -> [u8; PACKET_LEN] {
     if cfg.effect.writes_zone_bytes() {
         p[IDX_ZONES..IDX_ZONES + 12].copy_from_slice(&zone_bytes(&led_zones(&cfg)));
     }
-    match cfg.effect {
-        Effect::WaveRight | Effect::RainbowRight => p[IDX_WAVE_RIGHT] = 1,
-        Effect::WaveLeft | Effect::RainbowLeft => p[IDX_WAVE_LEFT] = 1,
-        _ => {}
-    }
     p
 }
 
-fn effect_from_code(code: u8, flag_right: bool, flag_left: bool) -> LiveEffect {
+/// Map a firmware effect code back to an effect this app models. The
+/// firmware wave code (0x04) is reported as unknown on purpose: this app
+/// does not expose the stepped firmware wave, and readback is unavailable on
+/// the verified controller anyway.
+fn effect_from_code(code: u8, _flag_right: bool, _flag_left: bool) -> LiveEffect {
     match code {
         0x00 => LiveEffect::Known(Effect::Off),
         0x01 => LiveEffect::Known(Effect::Static),
         0x03 => LiveEffect::Known(Effect::Breath),
-        0x04 if flag_right => LiveEffect::Known(Effect::WaveRight),
-        0x04 if flag_left => LiveEffect::Known(Effect::WaveLeft),
         0x06 => LiveEffect::Known(Effect::Smooth),
         other => LiveEffect::Unknown(other),
     }
@@ -229,9 +217,6 @@ mod tests {
     fn dimming_applies_to_every_effect_that_writes_colour_bytes() {
         let static_low = cfg(Effect::Static, 1, 1);
         assert_ne!(effective_zones(&static_low), static_low.zones);
-        // The palette wave now also carries user colours, so Low dims them.
-        let wave_low = cfg(Effect::WaveLeft, 1, 1);
-        assert_ne!(effective_zones(&wave_low), wave_low.zones);
         // Smooth does not write zone bytes — nothing to dim, bytes stay zero.
         let smooth_low = cfg(Effect::Smooth, 1, 1);
         let p = build_packet(&smooth_low);
@@ -239,40 +224,47 @@ mod tests {
     }
 
     #[test]
-    fn wave_carries_the_palette_bytes() {
-        // Hardware-verified: the wave engine renders from the zone colours.
-        let l = build_packet(&cfg(Effect::WaveLeft, 2, 2));
-        assert_eq!(l[2], 0x04);
-        assert_eq!(l[IDX_WAVE_LEFT], 1);
+    fn colour_wave_frames_are_static_packets() {
+        // The wave is host-rendered: each frame is a normal static packet
+        // (effect code 0x01) carrying the current wave colours, and no wave
+        // direction flag is ever set (direction is a software property).
+        let l = build_packet(&cfg(Effect::FlowLeft, 2, 2));
+        assert_eq!(l[2], 0x01);
+        assert_eq!(l[IDX_WAVE_LEFT], 0);
         assert_eq!(l[IDX_WAVE_RIGHT], 0);
+        // Palette mode shows the user's zone colours at phase 0.
         assert_eq!(&l[5..17], &[255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]);
 
-        let r = build_packet(&cfg(Effect::WaveRight, 3, 2));
-        assert_eq!(r[IDX_WAVE_RIGHT], 1);
-        assert_eq!(r[IDX_WAVE_LEFT], 0);
+        let r = build_packet(&cfg(Effect::FlowRight, 3, 2));
+        assert_eq!(r[2], 0x01);
+        assert_eq!(
+            r[5..17],
+            l[5..17],
+            "phase 0 is identical in both directions"
+        );
     }
 
     #[test]
-    fn rainbow_wave_golden_palette() {
-        // Auto rainbow hues 0/90/180/270 at full S/V:
-        //   h0   -> #ff0000
-        //   h90  -> #80ff00
-        //   h180 -> #00ffff
-        //   h270 -> #8000ff
-        let r = build_packet(&cfg(Effect::RainbowRight, 2, 2));
-        assert_eq!(r[2], 0x04);
-        assert_eq!(r[IDX_WAVE_RIGHT], 1);
+    fn spectrum_wave_uses_the_full_wheel_when_zones_are_identical() {
+        // All-white zones mean "no palette picked": the wave shows the wheel.
+        let cfg = LightingConfig {
+            effect: Effect::FlowRight,
+            speed: 2,
+            brightness: 2,
+            zones: [Rgb::white(); ZONE_COUNT],
+        };
+        let p = build_packet(&cfg);
+        assert_eq!(p[2], 0x01);
         assert_eq!(
-            &r[5..17],
+            &p[5..17],
             &[255, 0, 0, 128, 255, 0, 0, 255, 255, 128, 0, 255]
         );
-
-        let l = build_packet(&cfg(Effect::RainbowLeft, 2, 2));
-        assert_eq!(l[IDX_WAVE_LEFT], 1);
-        assert_eq!(l[IDX_WAVE_RIGHT], 0);
-        // At Low brightness the rainbow palette is host-dimmed (×0.6):
+        // At Low brightness the wave colours are host-dimmed (×0.6):
         // 255→153 (0x99), 128→77 (0x4D).
-        let dim = build_packet(&cfg(Effect::RainbowRight, 2, 1));
+        let dim = build_packet(&LightingConfig {
+            brightness: 1,
+            ..cfg
+        });
         assert_eq!(
             &dim[5..17],
             &[0x99, 0, 0, 0x4D, 0x99, 0, 0, 0x99, 0x99, 0x4D, 0, 0x99]
@@ -299,10 +291,8 @@ mod tests {
             Effect::Off,
             Effect::Static,
             Effect::Breath,
-            Effect::WaveLeft,
-            Effect::WaveRight,
-            Effect::RainbowLeft,
-            Effect::RainbowRight,
+            Effect::FlowLeft,
+            Effect::FlowRight,
             Effect::Smooth,
         ] {
             assert_eq!(build_packet(&cfg(e, 2, 2)).len(), PACKET_LEN);
@@ -311,15 +301,9 @@ mod tests {
 
     #[test]
     fn parse_state_round_trips_build() {
-        // Rainbow is byte-identical to the palette wave (same code + flag),
-        // so it cannot be told apart by readback — excluded here on purpose.
-        for e in [
-            Effect::Static,
-            Effect::Breath,
-            Effect::WaveLeft,
-            Effect::WaveRight,
-            Effect::Smooth,
-        ] {
+        // The colour wave sends static frames, so readback reports static —
+        // expected, and documented (the wave is host-rendered).
+        for e in [Effect::Static, Effect::Breath, Effect::Smooth] {
             let cfg = cfg(e, 3, 1);
             let p = build_packet(&cfg);
             let st = parse_state(&p).expect("valid packet parses");
@@ -337,11 +321,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_rainbow_packet_reports_wave_with_palette_bytes() {
-        let p = build_packet(&cfg(Effect::RainbowRight, 2, 2));
+    fn firmware_wave_code_is_not_mapped_to_a_supported_effect() {
+        // 0x04 is the stepped firmware wave, which this app no longer
+        // exposes. It must be reported honestly as unknown, not mislabelled.
+        let mut p = build_packet(&cfg(Effect::Static, 2, 2));
+        p[IDX_EFFECT] = 0x04;
+        p[IDX_WAVE_LEFT] = 1;
         let st = parse_state(&p).unwrap();
-        assert_eq!(st.effect, LiveEffect::Known(Effect::WaveRight));
-        assert_eq!(st.zones, auto_rainbow_palette());
+        assert_eq!(st.effect, LiveEffect::Unknown(0x04));
     }
 
     #[test]
